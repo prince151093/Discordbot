@@ -1,3 +1,5 @@
+const http = require("http");
+
 const {
   Client,
   GatewayIntentBits,
@@ -35,6 +37,27 @@ if (!config.clientId) {
   console.error("Missing CLIENT_ID environment variable.");
   process.exit(1);
 }
+
+function startHealthServer() {
+  const port = Number(process.env.PORT);
+  if (!port) return;
+
+  const server = http.createServer((req, res) => {
+    if (req.url === "/health" || req.url === "/") {
+      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Vehicle Life is running\n");
+      return;
+    }
+    res.writeHead(404);
+    res.end("Not found\n");
+  });
+
+  server.listen(port, "0.0.0.0", () => {
+    console.log(`Health server listening on port ${port}`);
+  });
+}
+
+startHealthServer();
 
 const client = new Client({
   intents: [

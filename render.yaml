@@ -1,5 +1,5 @@
 services:
-  - type: worker
+  - type: web
     name: vehicle-life-bot
     runtime: node
     buildCommand: npm install
@@ -14,7 +14,7 @@ services:
         sync: false
       - key: TOP_GARAGES_CHANNEL_ID
         sync: false
-      - key: MONGODB_URI
+      - key: SUPABASE_URL
         sync: false
-      - key: MONGODB_DB
-        value: vehiclelife
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

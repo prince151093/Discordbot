@@ -1,13 +1,20 @@
-const { MongoClient } = require("mongodb");
+const { createClient } = require("@supabase/supabase-js");
 const config = require("./config");
 
-if (!config.mongoUri) {
-  console.error("Missing MONGODB_URI environment variable.");
+if (!config.supabaseUrl) {
+  console.error("Missing SUPABASE_URL environment variable.");
+  process.exit(1);
+}
+if (!config.supabaseServiceRoleKey) {
+  console.error("Missing SUPABASE_SERVICE_ROLE_KEY environment variable.");
   process.exit(1);
 }
 
-const client = new MongoClient(config.mongoUri);
-let collection;
+const supabase = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+  auth: { persistSession: false, autoRefreshToken: false }
+});
+
+const TABLE = "users";
 const data = { users: {} };
 let saveQueue = Promise.resolve();
 
@@ -15,40 +22,64 @@ function key(userId, guildId) {
   return `${guildId}:${userId}`;
 }
 
-function userDoc(user) {
+function normalizeUser(row) {
   return {
-    _id: key(user.user_id, user.guild_id),
-    user_id: user.user_id,
-    guild_id: user.guild_id,
-    messages: user.messages,
-    vc_seconds: user.vc_seconds,
-    vehicle_index: user.vehicle_index,
-    last_vc_join: user.last_vc_join,
-    updated_at: user.updated_at
+    user_id: String(row.user_id),
+    guild_id: String(row.guild_id),
+    messages: Number(row.messages || 0),
+    vc_seconds: Number(row.vc_seconds || 0),
+    vehicle_index: Number(row.vehicle_index || 0),
+    last_vc_join: row.last_vc_join === null || row.last_vc_join === undefined
+      ? null
+      : Number(row.last_vc_join),
+    updated_at: Number(row.updated_at || 0)
   };
 }
 
 function queueSave(user) {
   const snapshot = { ...user };
   saveQueue = saveQueue
-    .then(() => collection.replaceOne({ _id: key(snapshot.user_id, snapshot.guild_id) }, userDoc(snapshot), { upsert: true }))
-    .catch(err => console.error("Could not save MongoDB user:", err.message));
+    .then(async () => {
+      const { error } = await supabase
+        .from(TABLE)
+        .upsert(snapshot, { onConflict: "guild_id,user_id" });
+
+      if (error) throw error;
+    })
+    .catch(err => console.error("Could not save Supabase user:", err.message));
+
   return saveQueue;
 }
 
-async function init() {
-  await client.connect();
-  const db = client.db(config.mongoDb);
-  collection = db.collection("users");
-  await collection.createIndex({ guild_id: 1, vehicle_index: -1, vc_seconds: -1, messages: -1 });
+async function loadAllUsers() {
+  const pageSize = 1000;
+  let from = 0;
+  let rows = [];
 
-  const rows = await collection.find({}).toArray();
-  for (const row of rows) {
-    const { _id, ...user } = row;
-    data.users[_id] = user;
+  while (true) {
+    const { data: page, error } = await supabase
+      .from(TABLE)
+      .select("user_id,guild_id,messages,vc_seconds,vehicle_index,last_vc_join,updated_at")
+      .range(from, from + pageSize - 1);
+
+    if (error) throw error;
+    rows = rows.concat(page || []);
+
+    if (!page || page.length < pageSize) break;
+    from += pageSize;
   }
 
-  console.log(`MongoDB connected. Database: ${config.mongoDb}, users loaded: ${rows.length}`);
+  for (const row of rows) {
+    const user = normalizeUser(row);
+    data.users[key(user.user_id, user.guild_id)] = user;
+  }
+
+  return rows.length;
+}
+
+async function init() {
+  const count = await loadAllUsers();
+  console.log(`Supabase connected. Users loaded: ${count}`);
 }
 
 function ensureUser(userId, guildId) {
@@ -109,22 +140,31 @@ function setVehicleIndex(userId, guildId, index) {
 function topUsers(guildId, limit = 10) {
   return Object.values(data.users)
     .filter(user => user.guild_id === guildId)
-    .sort((a, b) => b.vehicle_index - a.vehicle_index || b.vc_seconds - a.vc_seconds || b.messages - a.messages)
+    .sort((a, b) =>
+      b.vehicle_index - a.vehicle_index ||
+      b.vc_seconds - a.vc_seconds ||
+      b.messages - a.messages
+    )
     .slice(0, Math.max(1, Math.floor(limit)))
     .map(user => ({ ...user }));
 }
 
 async function close() {
+  const now = Date.now();
+
+  // Save any currently active VC session before shutting down so a Render
+  // restart does not silently discard time already spent in voice chat.
   for (const user of Object.values(data.users)) {
     if (user.last_vc_join !== null) {
+      const seconds = Math.floor((now - user.last_vc_join) / 1000);
+      if (seconds > 0) user.vc_seconds += seconds;
       user.last_vc_join = null;
-      user.updated_at = Math.floor(Date.now() / 1000);
+      user.updated_at = Math.floor(now / 1000);
       queueSave(user);
     }
   }
 
   await saveQueue;
-  await client.close();
 }
 
 module.exports = {

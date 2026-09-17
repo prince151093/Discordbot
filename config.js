@@ -5,6 +5,6 @@ module.exports = {
   clientId: process.env.CLIENT_ID,
   guildId: process.env.GUILD_ID || null,
   topGaragesChannelId: process.env.TOP_GARAGES_CHANNEL_ID || null,
-  mongoUri: process.env.MONGODB_URI || "",
-  mongoDb: process.env.MONGODB_DB || "vehiclelife"
+  supabaseUrl: process.env.SUPABASE_URL || "",
+  supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || ""
 };
